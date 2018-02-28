@@ -1,7 +1,10 @@
-import java.security.PublicKey;
+
 import java.util.*;
 
-public class TxHandler {
+/**
+ * Created by zhangkai on 2018/2/24.
+ */
+public class MaxFeeTxHandler {
 
     private UTXOPool utxoPool;
 
@@ -10,7 +13,7 @@ public class TxHandler {
      * {@code utxoPool}. This should make a copy of utxoPool by using the UTXOPool(UTXOPool uPool)
      * constructor.
      */
-    public TxHandler(UTXOPool utxoPool) {
+    public MaxFeeTxHandler(UTXOPool utxoPool) {
         this.utxoPool = new UTXOPool(utxoPool);
     }
 
@@ -24,44 +27,44 @@ public class TxHandler {
      * values; and false otherwise.
      */
     public boolean isValidTx(Transaction tx) {
-        UTXOPool uniqueUtxos = new UTXOPool();
-        double previousTxOutSum = 0;
-        double currentTxOutSum = 0;
-        for (int i = 0; i < tx.numInputs(); i++) {
-            Transaction.Input in = tx.getInput(i);
-            UTXO utxo = new UTXO(in.prevTxHash, in.outputIndex);
-            if (!utxoPool.contains(utxo))          // all previous outputs claimed by {@code tx} are in the current UTXO pool,
-                return false;
-            Transaction.Output output = utxoPool.getTxOutput(utxo);
-            if(null == output || null == in.signature){
-                return false;
-            }
-            if (!Crypto.verifySignature(output.address, tx.getRawDataToSign(i), in.signature))
-                return false;
-            if (uniqueUtxos.contains(utxo))    //double-spent
-                return false;
-            uniqueUtxos.addUTXO(utxo, output);
-            previousTxOutSum += output.value;
-        }
-        for (Transaction.Output out : tx.getOutputs()) {
-            if (out.value < 0)    //non-negative
-                return false;
-            currentTxOutSum += out.value;
-        }
-        return previousTxOutSum >= currentTxOutSum;   // input>=output
+        return TxHandler.isValidTx(tx);
     }
 
-    /**
-     * Handles each epoch by receiving an unordered array of proposed transactions, checking each
-     * transaction for correctness, returning a mutually valid array of accepted transactions, and
-     * updating the current UTXO pool as appropriate.
-     */
+
+    private double calcTxFees(Transaction tx) {
+        double sumInputs = 0;
+        double sumOutputs = 0;
+        for (Transaction.Input in : tx.getInputs()) {
+            UTXO utxo = new UTXO(in.prevTxHash, in.outputIndex);
+            if (!utxoPool.contains(utxo) || !isValidTx(tx)) {
+                continue;
+            }
+            Transaction.Output txOutput = utxoPool.getTxOutput(utxo);
+            sumInputs += txOutput.value;
+        }
+        for (Transaction.Output out : tx.getOutputs()) {
+            sumOutputs += out.value;
+        }
+        return sumInputs - sumOutputs;
+    }
+
+    //finds a set of transactions with maximum total transaction fees.
+    // i.e. maximize the sum over all transactions in the set of (sum of input values - sum of output values)).
     public Transaction[] handleTxs(Transaction[] possibleTxs) {
-        Set<Transaction> validTxs = new HashSet<Transaction>();
+        Set<Transaction> validTxs = new HashSet<Transaction>();;
         if(null == possibleTxs || possibleTxs.length < 1){
             return possibleTxs;
         }
-        for(Transaction tx: possibleTxs){
+
+        Set<Transaction> txsSortedByFees = new TreeSet<>((tx1, tx2) -> {
+            double tx1Fees = calcTxFees(tx1);
+            double tx2Fees = calcTxFees(tx2);
+            return Double.valueOf(tx2Fees).compareTo(tx1Fees);
+        });
+
+        Collections.addAll(txsSortedByFees, possibleTxs);
+
+        for(Transaction tx: txsSortedByFees){
             if(isValidTx(tx)){
                 ArrayList<Transaction.Input> inputs = tx.getInputs();
                 for(Transaction.Input input : inputs){
